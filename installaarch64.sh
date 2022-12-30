@@ -194,9 +194,10 @@ function run_machine () {
         -device virtio-rng-pci \
         -device qemu-xhci,id=xhci \
         -serial mon:stdio \
-        -drive "if=pflash,media=disk,id=drive0,file=flash0.img,cache=writethrough,format=raw,readonly=on" \
-        -drive "if=pflash,media=disk,id=drive1,file=flash1.img,cache=writethrough,format=raw" \
-        -drive "if=virtio,media=disk,id=drive2,file=arch.qcow2,cache=writethrough,format=qcow2" \
+        -drive if=pflash,media=disk,id=drive0,file=flash0.img,cache=none,format=raw,readonly=on \
+        -drive if=pflash,media=disk,id=drive1,file=flash1.img,cache=none,format=raw \
+        -drive if=none,media=disk,id=drive2,file=arch.qcow2,cache=none,format=qcow2 \
+        -device virtio-blk,drive=drive2,id=hd0,bootindex=1 \
         -nic user,model=virtio-net-pci
 }
 
@@ -230,13 +231,12 @@ step "Starting machine in 10 seconds.\n \
       Use ctrl+a, c to access muxed monitor.\n \
       \"quit\" in the monitor will kill the vm.\n \
       First boot will take a while, subsequent boots\n \
-      will be much faster."
+      will be much faster.\n \
+      To run your new machine, cd ${INSTALL_DIR},\n \
+      ./run.sh"
 
 sleep 10
 
 ./run.sh
-
-step "All done. To run your new machine, cd ${INSTALL_DIR},\n \
-      ./run.sh"
 
 exit 0
