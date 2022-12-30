@@ -19,7 +19,7 @@ DISK_SIZE=6
 _STEP=1
 
 step () {
-    echo -e "$(tput setaf 20)Step ${_STEP}$(tput setaf 9) => $(tput setaf 20)${1}$(tput sgr0)"
+    echo -e "$(tput setab 7)$(tput setaf 20)Step ${_STEP}$(tput setaf 9) => $(tput setaf 20)${1}$(tput sgr0)"
     ((_STEP++))
 }
 
