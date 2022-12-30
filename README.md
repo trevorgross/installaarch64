@@ -1,10 +1,10 @@
-#Create an aarch64 Arch Linux Arm vm in one click.#
+# Create an aarch64 Arch Linux Arm vm in one click.
 
 Create an [Arch Linux Arm](https://archlinuxarm.org/) [qemu](https://www.qemu.org/) VM in one click.
 
 Intended for use on an aarch64 host, but could easily be adapted for e.g. x86_64 hosts.
 
-This script sets up an aarch64 qemu vm with a hard drive and UEFI, downloads the latest Arch Linux Arm aarch64 release, and installs it.
+This script sets up an aarch64 qemu vm with a hard drive and UEFI, downloads the latest Arch Linux Arm aarch64 release, and installs it. See [here](https://archlinuxarm.org/platforms/armv8/broadcom/raspberry-pi-4), "Installation" tab, for more info about the image that's installed.
 
 Then it boots the VM, does a full system upgrade, and configures the UEFI boot device. This boot takes a _long_ time, because it waits for PXE. Subsequent boots are faster. The actual updates once booted depend on your Internet speed, but they take a little while. Just be patient and wait for the machine to shut off.
 
