@@ -179,7 +179,7 @@ convert_image () {
 }
 
 set_up_run () {
-cat << RUN > run.sh
+cat << 'RUN' > run.sh
 #!/bin/sh
 
 function run_machine () {
