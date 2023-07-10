@@ -230,8 +230,6 @@ set_up_run
 step "Starting machine in 10 seconds.\n \
       Use ctrl+a, c to access muxed monitor.\n \
       \"quit\" in the monitor will kill the vm.\n \
-      First boot will take a while, subsequent boots\n \
-      will be much faster.\n \
       To run your new machine, cd ${INSTALL_DIR},\n \
       ./run.sh"
 
