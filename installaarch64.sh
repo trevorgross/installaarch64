@@ -87,8 +87,8 @@ get_loop_dev () {
     done < <(sudo kpartx -av arch.raw)
 }
 
-format_mount_populate () {
-    step "Format, mount, and populate hard drive partitions"
+format_mount () {
+    step "Format and mount hard drive partitions"
     sudo mkfs.vfat "$EFIPART"
     sudo mkfs.ext4 "$ROOTPART"
     
@@ -97,7 +97,10 @@ format_mount_populate () {
     
     sudo mkdir root/boot
     sudo mount "$EFIPART" root/boot
-    
+}
+
+unpack () {
+    step "Unpack install files to hard drive"
     sudo bsdtar -xpf ArchLinuxARM-aarch64-latest.tar.gz -C root
 }
 
@@ -217,7 +220,9 @@ create_and_fdisk
 
 get_loop_dev
 
-format_mount_populate
+format_mount
+
+unpack
 
 set_up_image
 
