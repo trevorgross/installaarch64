@@ -186,22 +186,25 @@ cat << 'RUN' > run.sh
 #!/bin/sh
 
 function run_machine () {
-    qemu-system-aarch64 \
-        -M virt \
-        -nodefaults \
-        -nographic \
-        -m 1024 \
-        -smp 2 \
-        -enable-kvm \
-        -cpu host,pmu=off \
-        -device virtio-rng-pci \
-        -device qemu-xhci,id=xhci \
-        -serial mon:stdio \
-        -drive if=pflash,media=disk,id=drive0,file=flash0.img,cache=none,format=raw,readonly=on \
-        -drive if=pflash,media=disk,id=drive1,file=flash1.img,cache=none,format=raw \
-        -drive if=none,media=disk,id=drive2,file=arch.qcow2,cache=none,format=qcow2 \
-        -device virtio-blk,drive=drive2,id=hd0,bootindex=1 \
+    args=(
+        -M virt
+        -nodefaults
+        -nographic
+        -m 1024
+        -smp 2
+        -enable-kvm
+        -cpu host,pmu=off
+        -device virtio-rng-pci
+        -device qemu-xhci,id=xhci
+        -serial mon:stdio
+        -drive if=pflash,media=disk,id=drive0,file=flash0.img,cache=none,format=raw,readonly=on
+        -drive if=pflash,media=disk,id=drive1,file=flash1.img,cache=none,format=raw
+        -drive if=none,media=disk,id=drive2,file=arch.qcow2,cache=none,format=qcow2
+        -device virtio-blk,drive=drive2,id=hd0,bootindex=1
         -nic user,model=virtio-net-pci
+    )
+
+    qemu-system-aarch64 "${args[@]}"
 }
 
 run_machine
