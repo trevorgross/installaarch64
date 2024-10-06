@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -o errexit -o pipefail -o noclobber -o nounset
 
+# trap "exit" INT TERM
+# trap "undo" EXIT
+
 # Create an aarch64 Arch Linux Arm vm in one click.
 # adapted from: https://gist.github.com/thalamus/561d028ff5b66310fac1224f3d023c12
 
@@ -16,32 +19,88 @@ DISK_SIZE=6
 # Don't change anything below here 
 ########################################
 
-_STEP=1
-
-step () {
-    echo -e "$(tput setab 7)$(tput setaf 20)Step ${_STEP}$(tput setaf 9) => $(tput setaf 20)${1}$(tput sgr0)"
-    ((_STEP++))
-}
-
-create_install_dir () {
-    step "Creating install directory $INSTALL_DIR"
-    if [[ -d "$INSTALL_DIR" ]]; then
-        echo "$INSTALL_DIR already exists, exiting"
-        exit 1
-    fi
-    if mkdir "$INSTALL_DIR"; then
-        echo "$INSTALL_DIR created"
-    fi
-    cd $INSTALL_DIR
-    pushd . > /dev/null
-}
+URL="http://os.archlinuxarm.org/os/"
+FILE="ArchLinuxARM-rpi-aarch64-latest.tar.gz"
 
 EFIPART=""
 ROOTPART=""
+MISSING_TOOLS=0
+STARTDIR=$(pwd)
+
+_STEP=1
+
+step () {
+    echo -e "$(tput setab 7)$(tput setaf 10)Step ${_STEP} $(tput setaf 0)=>$(tput setaf 12) ${1}$(tput sgr0)"
+    ((_STEP++))
+}
+
+info () {
+    echo -e "$(tput setab 7)$(tput setaf 12)Info   $(tput setaf 0)=>$(tput setaf 12) ${1}$(tput sgr0)"
+}
+
+err () {
+    echo -e "$(tput setab 7)$(tput setaf 9)Error  $(tput setaf 0)=>$(tput setaf 12) ${1}$(tput sgr0)"
+}
+
+check_kpartx () {
+    if [[ -n "$(kpartx --version 2> /dev/null)" ]]; then
+        info "Found kpartx"
+    else
+        err "'kpartx' not found. Install the 'multipath-tools' package"
+        MISSING_TOOLS=1
+    fi
+}
+
+check_dosfstools () {
+    if [[ -n "$(mkfs.vfat --version 2> /dev/null)" ]]; then
+        info "Found mkfs.vfat"
+    else
+        err "'mkfs.vfat' not found. Install the 'dosfstools' package"
+        MISSING_TOOLS=1
+    fi    
+}
+
+check_uefi () {
+    if [[ -f "/usr/share/edk2/aarch64/QEMU_EFI.fd" ]]; then
+        info "Found UEFI files"
+    else
+        err "UEFI files are required. Install aarch64 OVMF (not in arm repo):"
+        err "   https://archive.archlinux.org/packages/e/edk2-aarch64/edk2-aarch64-202311-1-any.pkg.tar.zst"
+        err "   $ sudo pacman -U edk2-aarch64-202311-1-any.pkg.tar.zst"
+        exit 2
+    fi
+}
+
+run_prog_checks () {
+    step "Checking requirements"
+    check_kpartx
+    check_dosfstools
+    check_uefi
+    if [[ MISSING_TOOLS -eq 1 ]]; then
+        exit 2
+    fi
+}
+
+create_install_dir () {
+    step "Creating install directory '$INSTALL_DIR'"
+    if [[ -d "$INSTALL_DIR" ]]; then
+        err "$INSTALL_DIR already exists, exiting"
+        exit 1
+    fi
+    if mkdir "$INSTALL_DIR"; then
+        info "'$INSTALL_DIR' created"
+    fi
+}
 
 download_media () {
-    step "Downloading install media"
-    wget --quiet --show-progress http://os.archlinuxarm.org/os/ArchLinuxARM-aarch64-latest.tar.gz
+    step "Finding install media"
+    if [[ ! -f "$FILE" ]]; then
+        info "Downloading media..."
+        # Arch will have curl
+        curl --progress-bar -Lo "${FILE}" "${URL}${FILE}"
+    else
+        info "Install media found, reusing"
+    fi
 }
 
 set_up_uefi () {
@@ -60,7 +119,7 @@ create_and_fdisk () {
     echo n      # new partition
     echo        # default number 1
     echo        # default start sector
-    echo +256M  # 256M EFI partition
+    echo +512M  # 512M EFI partition
     echo t      # type
     echo 1      # EFI system partition
     echo n      # new partition
@@ -101,13 +160,14 @@ format_mount () {
 
 unpack () {
     step "Unpack install files to hard drive"
-    sudo bsdtar -xpf ArchLinuxARM-aarch64-latest.tar.gz -C root
+    sudo bsdtar -xpf "../${FILE}" -C root
+    sync
 }
 
 set_up_image () {
     step "Create files for first boot configuration"
-    BOOTUUID="$(sudo blkid $EFIPART|awk '{print $3}'|cut -b 7-15)"
-    ROOTUUID="$(sudo blkid $ROOTPART|awk '{print $2}'|cut -b 7-42)"
+    BOOTUUID="$(sudo blkid -s UUID -o value $EFIPART)"
+    ROOTUUID="$(sudo blkid -s UUID -o value $ROOTPART)"
     
     sudo rm root/etc/fstab
 cat << EOF > tmp
@@ -125,15 +185,107 @@ EOF
     echo "Image root=UUID=$ROOTUUID rw initrd=\initramfs-linux.img" > tmp
     sudo mv tmp root/boot/startup.nsh
 
-cat << EOFF > tmp
+cat <<'EOF' > tmp
 #!/bin/sh
+
 pacman-key --init
 pacman-key --populate archlinuxarm
-pacman --noconfirm -Syu efibootmgr
+
+PROGS="efibootmgr ethtool gdisk htop inetutils linux-headers lvm2 nfs-utils nmap openssh sudo tcpdump tmux usbutils vim wget zsh"
+pacman --noconfirm -Syu ${PROGS}
+
 efibootmgr --disk /dev/vda --part 1 --create --label "Arch Linux ARM" --loader /Image --unicode 'root=UUID=$ROOTUUID rw initrd=\initramfs-linux.img audit=0' --verbose
+
+ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime
+
+sed -i 's/#en_US.UTF-8/en_US.UTF-8/' /etc/locale.gen
+locale-gen
+echo "LANG=en_US.UTF-8" > /etc/locale.conf
+
+echo "\4" >> /etc/issue
+echo >> /etc/issue
+
+cat <<EOFF > /etc/profile.d/nice-aliases.sh
+alias confgrep="grep -v '^#\|^$'"
+alias diff="diff --color=auto"
+alias grep="grep --color=auto"
+alias ip="ip --color=auto"
+alias ls="ls --color=auto"
+alias lsd="ls --group-directories-first"
+EOFF
+
+USERNAME=ii
+
+mv /home/alarm "/home/${USERNAME}"
+
+usermod -l "${USERNAME}" alarm
+usermod -d "/home/${USERNAME}" "${USERNAME}"
+groupmod -n "${USERNAME}" alarm
+
+sed -i 's/alarm/ii/g' /etc/subuid
+sed -i 's/alarm/ii/g' /etc/subgid
+
+chsh -s /bin/zsh "${USERNAME}"
+
+(
+echo asdf
+echo asdf
+) | passwd "${USERNAME}" > /dev/null
+
+cat <<'ENDZSH' > /home/"${USERNAME}"/.zshrc
+# https://wiki.archlinux.org/index.php/SSH_keys#SSH_agents
+if ! pgrep -u "$USER" ssh-agent > /dev/null; then
+    ssh-agent > ~/.ssh-agent-running
+fi
+if [[ "$SSH_AGENT_PID" == "" ]]; then
+    eval "$(<~/.ssh-agent-running)"
+fi
+
+case $TERM in
+    xterm*)
+        precmd () {print -Pn "\e]0;%n@%m:%~\a"}
+        ;;
+esac
+
+eval $(dircolors -b)
+
+export EDITOR="vim"
+export HISTFILE=~/.zsh_history
+export HISTFILESIZE=1000000000
+export HISTSIZE=1000000000
+export HISTTIMEFORMAT="%a %b %d %R "
+export PROMPT='%B%F{47}%n%f%b@%B%F{208}%m%f%b %B%F{199}%~%f%b %# '
+export RPROMPT='%B%F{69}%D{%H:%M:%S}%f%b'
+export SAVEHIST=10000
+export TERM=xterm-256color
+export VISUAL="vim"
+
+setopt INC_APPEND_HISTORY
+setopt EXTENDED_HISTORY
+setopt HIST_IGNORE_ALL_DUPS
+setopt CORRECT
+
+bindkey "^A" beginning-of-line
+bindkey "^E" end-of-line
+bindkey "^R" history-incremental-search-backward
+bindkey "^[[3~" delete-char
+
+. /etc/profile.d/nice-aliases.sh
+alias bc="bc -l"
+alias dmesg="dmesg -T"
+alias history="history -i 1"
+alias screen="screen -q"
+function ccd { mkdir -p "$1" && cd "$1" }
+ENDZSH
+
+chown -R "${USERNAME}":"${USERNAME}" /home/"${USERNAME}"
+
+echo '%wheel ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/99-wheel-nopass
+chmod 640 /etc/sudoers.d/99-wheel-nopass
+
 systemctl disable setup.service
 shutdown -h now
-EOFF
+EOF
 
     sudo mv tmp root/root/setup.sh
     sudo chown root:root root/root/setup.sh
@@ -164,13 +316,19 @@ SYSD
 
 cleanup () {
     step "Clean up: umount, remove files"
-    popd > /dev/null
     sudo umount root/boot
     sudo umount root
     sudo kpartx -d arch.raw
     sudo rmdir root
-    rm ArchLinuxARM-aarch64-latest.tar.gz
+    #rm "${FILE}"
     sync
+}
+
+undo () {
+    err "Something went wrong, bailing out."
+    sudo umount root/boot
+    sudo umount root
+    sudo kpartx -d arch.raw
     sync
 }
 
@@ -213,9 +371,14 @@ RUN
     chmod 755 run.sh
 }
 
+run_prog_checks
+
 create_install_dir
 
 download_media
+
+cd "$INSTALL_DIR"
+pushd . > /dev/null
 
 set_up_uefi
 
@@ -229,6 +392,8 @@ unpack
 
 set_up_image
 
+popd > /dev/null
+
 cleanup
 
 convert_image
@@ -241,7 +406,14 @@ step "Starting machine in 10 seconds.\n \
       To run your new machine, cd ${INSTALL_DIR},\n \
       ./run.sh"
 
-sleep 10
+I=10
+while [[ $I -gt 0 ]]; do
+    echo -ne "$(tput setab 7)$(tput setaf 12)  $I  $(tput sgr0)"
+    sleep 1
+    ((I--))
+    printf '\r'
+done
+echo -e "$(tput setab 7)$(tput setaf 12)  0  $(tput sgr0)"
 
 ./run.sh
 
