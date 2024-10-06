@@ -64,9 +64,9 @@ check_uefi () {
     if [[ -f "/usr/share/edk2/aarch64/QEMU_EFI.fd" ]]; then
         info "Found UEFI files"
     else
-        err "UEFI files are required. Install aarch64 OVMF (not in arm repo):"
-        err "   https://archive.archlinux.org/packages/e/edk2-aarch64/edk2-aarch64-202311-1-any.pkg.tar.zst"
-        err "   $ sudo pacman -U edk2-aarch64-202311-1-any.pkg.tar.zst"
+        err "UEFI files are required. Install aarch64 OVMF (not in arm repo):\n \
+         download https://archive.archlinux.org/packages/e/edk2-aarch64/edk2-aarch64-202311-1-any.pkg.tar.zst\n \
+         $ sudo pacman -U edk2-aarch64-202311-1-any.pkg.tar.zst"
         exit 2
     fi
 }
@@ -182,7 +182,7 @@ EOF
     sudo mv tmp root/etc/fstab
     sudo chown root:root root/etc/fstab
 
-    echo "Image root=UUID=$ROOTUUID rw initrd=\initramfs-linux.img" > tmp
+    echo "Image root=UUID=$ROOTUUID rw initrd=\initramfs-linux.img audit=0" > tmp
     sudo mv tmp root/boot/startup.nsh
 
 cat <<'EOF' > tmp
@@ -194,7 +194,8 @@ pacman-key --populate archlinuxarm
 PROGS="efibootmgr ethtool gdisk htop inetutils linux-headers lvm2 nfs-utils nmap openssh sudo tcpdump tmux usbutils vim wget zsh"
 pacman --noconfirm -Syu ${PROGS}
 
-efibootmgr --disk /dev/vda --part 1 --create --label "Arch Linux ARM" --loader /Image --unicode 'root=UUID=$ROOTUUID rw initrd=\initramfs-linux.img audit=0' --verbose
+ROOT="$(blkid -s UUID -o value /dev/vda2)"
+efibootmgr --disk /dev/vda --part 1 --create --label "Arch Linux ARM" --loader \Image --unicode "root=UUID=$ROOT rw initrd=\initramfs-linux.img audit=0" --verbose
 
 ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime
 
@@ -359,7 +360,8 @@ function run_machine () {
         -drive if=pflash,media=disk,id=drive1,file=flash1.img,cache=none,format=raw
         -drive if=none,media=disk,id=drive2,file=arch.qcow2,cache=none,format=qcow2
         -device virtio-blk,drive=drive2,id=hd0,bootindex=1
-        -nic user,model=virtio-net-pci
+        -device virtio-net-pci,netdev=n0
+        -netdev user,id=n0,hostfwd=tcp::5555-:22
     )
 
     qemu-system-aarch64 "${args[@]}"
