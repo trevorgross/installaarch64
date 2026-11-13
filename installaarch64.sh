@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -o errexit -o pipefail -o noclobber -o nounset
 
+if [[ $(id -u) -ne 0 ]]; then
+    echo "Run this as root only."
+    exit 2
+fi
+
 # trap "exit" INT TERM
 # trap "undo" EXIT
 
@@ -24,8 +29,8 @@ FILE="ArchLinuxARM-rpi-aarch64-latest.tar.gz"
 
 EFIPART=""
 ROOTPART=""
+ROOTUUID=""
 MISSING_TOOLS=0
-STARTDIR=$(pwd)
 
 _STEP=1
 
@@ -43,7 +48,7 @@ err () {
 }
 
 check_kpartx () {
-    if [[ -n "$(kpartx --version 2> /dev/null)" ]]; then
+    if [[ -n $(kpartx --version 2> /dev/null) ]]; then
         info "Found kpartx"
     else
         err "'kpartx' not found. Install the 'multipath-tools' package"
@@ -52,7 +57,7 @@ check_kpartx () {
 }
 
 check_dosfstools () {
-    if [[ -n "$(mkfs.vfat --version 2> /dev/null)" ]]; then
+    if [[ -n $(mkfs.vfat --version 2> /dev/null) ]]; then
         info "Found mkfs.vfat"
     else
         err "'mkfs.vfat' not found. Install the 'dosfstools' package"
@@ -65,9 +70,17 @@ check_uefi () {
         info "Found UEFI files"
     else
         err "UEFI files are required. Install aarch64 OVMF (not in arm repo):\n \
-         download https://archive.archlinux.org/packages/e/edk2-aarch64/edk2-aarch64-202311-1-any.pkg.tar.zst\n \
-         $ sudo pacman -U edk2-aarch64-202311-1-any.pkg.tar.zst"
-        exit 2
+         download from https://archive.archlinux.org/packages/e/edk2-aarch64/"
+        MISSING_TOOLS=1
+    fi
+}
+
+check_qemu_img () {
+    if [[ -n $(qemu-img --version 2> /dev/null) ]]; then
+        info "Found qemu-img."
+    else
+        err "'qemu-img' not found. Install the 'qemu-img' package."
+        MISSING_TOOLS=1
     fi
 }
 
@@ -76,7 +89,8 @@ run_prog_checks () {
     check_kpartx
     check_dosfstools
     check_uefi
-    if [[ MISSING_TOOLS -eq 1 ]]; then
+    check_qemu_img
+    if [[ $MISSING_TOOLS -eq 1 ]]; then
         exit 2
     fi
 }
@@ -104,30 +118,30 @@ download_media () {
 }
 
 set_up_uefi () {
-    step "Create UEFI files"
-    dd if=/dev/zero of=flash1.img bs=1M count=64
-    dd if=/dev/zero of=flash0.img bs=1M count=64
-    dd if=/usr/share/edk2/aarch64/QEMU_EFI.fd of=flash0.img conv=notrunc
+    step "Copy UEFI files"
+    cp /usr/share/edk2/aarch64/QEMU_{EFI,VARS}.fd .
 }
 
 create_and_fdisk () {
     step "Create and format virtual HD (${DISK_SIZE}GB)"
-    qemu-img create -f raw arch.raw ${DISK_SIZE}G
+    qemu-img create -f raw arch.img ${DISK_SIZE}G
     
     (
-    echo g      # GPT partition table
+    echo o      # delete all partitions
+    echo y      # confirm
     echo n      # new partition
     echo        # default number 1
     echo        # default start sector
-    echo +512M  # 512M EFI partition
-    echo t      # type
-    echo 1      # EFI system partition
+    echo +1G    # 1G EFI partition
+    echo ef00   # EFI partition type
     echo n      # new partition
-    echo        # default number
-    echo        # default first sector
-    echo        # use entire disk
+    echo        # default number 2
+    echo        # default start sector
+    echo        # default end sector (entire disk)
+    echo        # default type (Linux)
     echo w      # write the partition table
-    ) | sudo fdisk arch.raw > /dev/null
+    echo y      # confirm write
+    ) | gdisk arch.img
 }
 
 get_loop_dev () {
@@ -143,59 +157,55 @@ get_loop_dev () {
             ROOTPART="/dev/mapper/$STR"
             echo "ROOTPART = $ROOTPART"
         fi;    
-    done < <(sudo kpartx -av arch.raw)
+    done < <(kpartx -av arch.img)
 }
 
 format_mount () {
     step "Format and mount hard drive partitions"
-    sudo mkfs.vfat "$EFIPART"
-    sudo mkfs.ext4 "$ROOTPART"
+    mkfs.vfat -F32 "$EFIPART"
+    mkfs.ext4 -F -L root "$ROOTPART"
     
-    sudo mkdir root
-    sudo mount "$ROOTPART" root
+    mkdir root
+    mount "$ROOTPART" root
     
-    sudo mkdir root/boot
-    sudo mount "$EFIPART" root/boot
+    mkdir root/boot
+    mount "$EFIPART" root/boot
 }
 
 unpack () {
     step "Unpack install files to hard drive"
-    sudo bsdtar -xpf "../${FILE}" -C root
+    bsdtar -xpf "../${FILE}" -C root
     sync
 }
 
 set_up_image () {
     step "Create files for first boot configuration"
-    BOOTUUID="$(sudo blkid -s UUID -o value $EFIPART)"
-    ROOTUUID="$(sudo blkid -s UUID -o value $ROOTPART)"
+    BOOTUUID="$(lsblk -noUUID $EFIPART)"
+    ROOTUUID="$(lsblk -noUUID $ROOTPART)"
     
-    sudo rm root/etc/fstab
-cat << EOF > tmp
+    rm root/etc/fstab
+cat << EOF > root/etc/fstab
 # Static information about the filesystems.
 # See fstab(5) for details.
 
 # <file system> <dir> <type> <options> <dump> <pass>
-/dev/disk/by-uuid/$ROOTUUID / ext4 defaults 0 0
-/dev/disk/by-uuid/$BOOTUUID /boot vfat defaults 0 0
+UUID=$BOOTUUID  /boot   vfat    defaults    0   0
 EOF
 
-    sudo mv tmp root/etc/fstab
-    sudo chown root:root root/etc/fstab
+    cp root/boot/Image .
+    cp root/boot/initramfs-linux.img .
 
-    echo "Image root=UUID=$ROOTUUID rw initrd=\initramfs-linux.img audit=0" > tmp
-    sudo mv tmp root/boot/startup.nsh
-
-cat <<'EOF' > tmp
+cat <<'EOF' > root/root/setup.sh
 #!/bin/sh
 
 pacman-key --init
 pacman-key --populate archlinuxarm
 
-PROGS="efibootmgr ethtool gdisk htop inetutils linux-headers lvm2 nfs-utils nmap openssh sudo tcpdump tmux usbutils vim wget zsh"
+PROGS="efibootmgr ethtool gdisk htop inetutils lvm2 nfs-utils nmap openssh sudo tcpdump tmux usbutils vim wget zsh"
 pacman --noconfirm -Syu ${PROGS}
 
-ROOT="$(blkid -s UUID -o value /dev/vda2)"
-efibootmgr --disk /dev/vda --part 1 --create --label "Arch Linux ARM" --loader \Image --unicode "root=UUID=$ROOT rw initrd=\initramfs-linux.img audit=0" --verbose
+ROOT="$(lsblk -noUUID /dev/vda2)"
+efibootmgr --disk /dev/vda --part 1 --create --label "Arch Linux ARM" --loader \Image --unicode "root=UUID=$ROOT rw initrd=\initramfs-linux.img" --verbose
 
 ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime
 
@@ -218,20 +228,11 @@ EOFF
 USERNAME=ii
 
 mv /home/alarm "/home/${USERNAME}"
-
-usermod -l "${USERNAME}" alarm
-usermod -d "/home/${USERNAME}" "${USERNAME}"
 groupmod -n "${USERNAME}" alarm
+usermod -a -d "/home/${USERNAME}" -G wheel -l "${USERNAME}" -s /bin/zsh alarm
 
-sed -i 's/alarm/ii/g' /etc/subuid
-sed -i 's/alarm/ii/g' /etc/subgid
-
-chsh -s /bin/zsh "${USERNAME}"
-
-(
-echo asdf
-echo asdf
-) | passwd "${USERNAME}" > /dev/null
+sed -i "s/alarm/$USERNAME/g" /etc/subuid
+sed -i "s/alarm/$USERNAME/g" /etc/subgid
 
 cat <<'ENDZSH' > /home/"${USERNAME}"/.zshrc
 # https://wiki.archlinux.org/index.php/SSH_keys#SSH_agents
@@ -255,8 +256,8 @@ export HISTFILE=~/.zsh_history
 export HISTFILESIZE=1000000000
 export HISTSIZE=1000000000
 export HISTTIMEFORMAT="%a %b %d %R "
-export PROMPT='%B%F{47}%n%f%b@%B%F{208}%m%f%b %B%F{199}%~%f%b %# '
-export RPROMPT='%B%F{69}%D{%H:%M:%S}%f%b'
+export PROMPT='%B%F{147}%n%f%b@%B%F{108}%m%f%b %B%F{99}%~%f%b %# '
+export RPROMPT='%B%F{169}%D{%H:%M:%S}%f%b'
 export SAVEHIST=10000
 export TERM=xterm-256color
 export VISUAL="vim"
@@ -284,15 +285,24 @@ chown -R "${USERNAME}":"${USERNAME}" /home/"${USERNAME}"
 echo '%wheel ALL=(ALL:ALL) NOPASSWD: ALL' > /etc/sudoers.d/99-wheel-nopass
 chmod 640 /etc/sudoers.d/99-wheel-nopass
 
+l2r () {
+    curl -L https://github.com/azlux/log2ram/archive/master.tar.gz | tar zxf -
+    cd log2ram-master
+    chmod +x install.sh && ./install.sh
+    cd ..
+    rm -r log2ram-master
+}
+
+l2r
+
 systemctl disable setup.service
 shutdown -h now
 EOF
 
-    sudo mv tmp root/root/setup.sh
-    sudo chown root:root root/root/setup.sh
-    sudo chmod 755 root/root/setup.sh
+    chown root:root root/root/setup.sh
+    chmod 755 root/root/setup.sh
     
-cat << SYSD > tmp
+cat << SYSD > root/etc/systemd/system/setup.service
 [Unit]
 Description=Initial setup
 Wants=network-online.target
@@ -307,68 +317,73 @@ ExecStart=/root/setup.sh
 WantedBy=multi-user.target
 SYSD
 
-    sudo mv tmp root/etc/systemd/system/setup.service
-    sudo chown root:root root/etc/systemd/system/setup.service
-    sudo chmod 644 root/etc/systemd/system/setup.service
+    chown root:root root/etc/systemd/system/setup.service
+    chmod 644 root/etc/systemd/system/setup.service
     
+    pushd .
     cd root/etc/systemd/system/multi-user.target.wants/
-    sudo ln -s ../setup.service .
+    ln -s ../setup.service .
+    popd
 }
 
 cleanup () {
     step "Clean up: umount, remove files"
-    sudo umount root/boot
-    sudo umount root
-    sudo kpartx -d arch.raw
-    sudo rmdir root
+    umount root/boot
+    umount root
+    kpartx -dv arch.img
+    rmdir root
     #rm "${FILE}"
     sync
 }
 
 undo () {
     err "Something went wrong, bailing out."
-    sudo umount root/boot
-    sudo umount root
-    sudo kpartx -d arch.raw
+    umount root/boot
+    umount root
+    kpartx -dv arch.img
     sync
 }
 
 convert_image () {
     step "Convert HD image from raw to qcow2"
-    if qemu-img convert -p -O qcow2 arch.raw arch.qcow2; then
-        rm arch.raw
+    if qemu-img convert -p -O qcow2 arch.img arch.qcow2; then
+        rm arch.img
     fi
 }
 
 set_up_run () {
-cat << 'RUN' > run.sh
+cat << RUN > run.sh
 #!/bin/sh
 
 function run_machine () {
     args=(
         -M virt
+        -kernel Image
+        -initrd initramfs-linux.img
+        -append 'root=UUID=$ROOTUUID rw initrd=\initramfs-linux.img'
         -nodefaults
         -nographic
         -m 1024
         -smp 2
         -enable-kvm
-        -cpu host,pmu=off
+        -cpu host
         -device virtio-rng-pci
         -device qemu-xhci,id=xhci
         -serial mon:stdio
-        -drive if=pflash,media=disk,id=drive0,file=flash0.img,cache=none,format=raw,readonly=on
-        -drive if=pflash,media=disk,id=drive1,file=flash1.img,cache=none,format=raw
-        -drive if=none,media=disk,id=drive2,file=arch.qcow2,cache=none,format=qcow2
-        -device virtio-blk,drive=drive2,id=hd0,bootindex=1
+        -drive if=pflash,media=disk,id=EFI,file=QEMU_EFI.fd,cache=none,format=raw,readonly=on
+        -drive if=pflash,media=disk,id=EFIVARS,file=QEMU_VARS.fd,cache=none,format=raw
+        -drive if=virtio,media=disk,id=hda,file=arch.qcow2,cache=none,format=qcow2
         -device virtio-net-pci,netdev=n0
         -netdev user,id=n0,hostfwd=tcp::5555-:22
     )
+RUN
+cat << 'RUN2' >> run.sh
 
     qemu-system-aarch64 "${args[@]}"
 }
 
 run_machine
-RUN
+RUN2
 
     chmod 755 run.sh
 }
@@ -380,7 +395,6 @@ create_install_dir
 download_media
 
 cd "$INSTALL_DIR"
-pushd . > /dev/null
 
 set_up_uefi
 
@@ -393,8 +407,6 @@ format_mount
 unpack
 
 set_up_image
-
-popd > /dev/null
 
 cleanup
 
@@ -418,5 +430,9 @@ done
 echo -e "$(tput setab 7)$(tput setaf 12)  0  $(tput sgr0)"
 
 ./run.sh
+
+rm Image
+rm initramfs-linux.img
+cd ..
 
 exit 0
