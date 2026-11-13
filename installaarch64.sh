@@ -35,16 +35,16 @@ MISSING_TOOLS=0
 _STEP=1
 
 step () {
-    echo -e "$(tput setab 7)$(tput setaf 10)Step ${_STEP} $(tput setaf 0)=>$(tput setaf 12) ${1}$(tput sgr0)"
+    echo -e "$(tput setaf 13)Step ${_STEP} $(tput sgr0)=> ${1}"
     ((_STEP++))
 }
 
 info () {
-    echo -e "$(tput setab 7)$(tput setaf 12)Info   $(tput setaf 0)=>$(tput setaf 12) ${1}$(tput sgr0)"
+    echo -e "    $(tput setaf 11)Info   $(tput sgr0)=> ${1}"
 }
 
 err () {
-    echo -e "$(tput setab 7)$(tput setaf 9)Error  $(tput setaf 0)=>$(tput setaf 12) ${1}$(tput sgr0)"
+    echo -e "$(tput setaf 9)Error  $(tput sgr0)=> ${1}"
 }
 
 check_kpartx () {
@@ -60,24 +60,24 @@ check_dosfstools () {
     if [[ -n $(mkfs.vfat --version 2> /dev/null) ]]; then
         info "Found mkfs.vfat"
     else
-        err "'mkfs.vfat' not found. Install the 'dosfstools' package"
+        err "'mkfs.vfat' not found. Install the 'dosfstools' package."
         MISSING_TOOLS=1
     fi    
 }
 
 check_uefi () {
-    if [[ -f "/usr/share/edk2/aarch64/QEMU_EFI.fd" ]]; then
+    if [[ -f "/usr/share/edk2/aarch64/QEMU_EFI.fd" ]] && [[ -f "/usr/share/edk2/aarch64/QEMU_VARS.fd" ]]; then
         info "Found UEFI files"
     else
-        err "UEFI files are required. Install aarch64 OVMF (not in arm repo):\n \
-         download from https://archive.archlinux.org/packages/e/edk2-aarch64/"
+        err "UEFI files are required. Install aarch64 OVMF (not in arm repo).\n \
+         Download from: https://archive.archlinux.org/packages/e/edk2-aarch64/"
         MISSING_TOOLS=1
     fi
 }
 
 check_qemu_img () {
     if [[ -n $(qemu-img --version 2> /dev/null) ]]; then
-        info "Found qemu-img."
+        info "Found qemu-img"
     else
         err "'qemu-img' not found. Install the 'qemu-img' package."
         MISSING_TOOLS=1
@@ -141,7 +141,7 @@ create_and_fdisk () {
     echo        # default type (Linux)
     echo w      # write the partition table
     echo y      # confirm write
-    ) | gdisk arch.img
+    ) | gdisk arch.img > /dev/null
 }
 
 get_loop_dev () {
@@ -151,19 +151,19 @@ get_loop_dev () {
         STR=$(awk '{print $3}' <<< "$out")
         if [ "${STR: -1}" == 1 ]; then
             EFIPART="/dev/mapper/$STR"
-            echo "EFIPART  = $EFIPART"
+            info "EFIPART  = $EFIPART"
         fi
         if [ "${STR: -1}" == 2 ]; then
             ROOTPART="/dev/mapper/$STR"
-            echo "ROOTPART = $ROOTPART"
+            info "ROOTPART = $ROOTPART"
         fi;    
     done < <(kpartx -av arch.img)
 }
 
 format_mount () {
     step "Format and mount hard drive partitions"
-    mkfs.vfat -F32 "$EFIPART"
-    mkfs.ext4 -F -L root "$ROOTPART"
+    mkfs.vfat -F32 "$EFIPART" > /dev/null
+    mkfs.ext4 -F -L root "$ROOTPART" > /dev/null
     
     mkdir root
     mount "$ROOTPART" root
@@ -180,8 +180,8 @@ unpack () {
 
 set_up_image () {
     step "Create files for first boot configuration"
-    BOOTUUID="$(lsblk -noUUID $EFIPART)"
-    ROOTUUID="$(lsblk -noUUID $ROOTPART)"
+    BOOTUUID="$(lsblk -no UUID $EFIPART)"
+    ROOTUUID="$(lsblk -no UUID $ROOTPART)"
     
     rm root/etc/fstab
 cat << EOF > root/etc/fstab
@@ -201,10 +201,10 @@ cat <<'EOF' > root/root/setup.sh
 pacman-key --init
 pacman-key --populate archlinuxarm
 
-PROGS="efibootmgr ethtool gdisk htop inetutils lvm2 nfs-utils nmap openssh sudo tcpdump tmux usbutils vim wget zsh"
+PROGS="efibootmgr ethtool gdisk htop inetutils less lvm2 nfs-utils nmap openssh sudo tcpdump tmux usbutils vim wget zsh"
 pacman --noconfirm -Syu ${PROGS}
 
-ROOT="$(lsblk -noUUID /dev/vda2)"
+ROOT="$(lsblk -no UUID /dev/vda2)"
 efibootmgr --disk /dev/vda --part 1 --create --label "Arch Linux ARM" --loader \Image --unicode "root=UUID=$ROOT rw initrd=\initramfs-linux.img" --verbose
 
 ln -sf /usr/share/zoneinfo/America/New_York /etc/localtime
@@ -256,8 +256,8 @@ export HISTFILE=~/.zsh_history
 export HISTFILESIZE=1000000000
 export HISTSIZE=1000000000
 export HISTTIMEFORMAT="%a %b %d %R "
-export PROMPT='%B%F{147}%n%f%b@%B%F{108}%m%f%b %B%F{99}%~%f%b %# '
-export RPROMPT='%B%F{169}%D{%H:%M:%S}%f%b'
+export PROMPT='%B%F{93}%n%f%b@%B%F{93}%m%f%b %B%F{47}%~%f%b %# '
+export RPROMPT='%B%F{122}%D{%H:%M:%S}%f%b'
 export SAVEHIST=10000
 export TERM=xterm-256color
 export VISUAL="vim"
@@ -320,17 +320,17 @@ SYSD
     chown root:root root/etc/systemd/system/setup.service
     chmod 644 root/etc/systemd/system/setup.service
     
-    pushd .
+    pushd . > /dev/null
     cd root/etc/systemd/system/multi-user.target.wants/
     ln -s ../setup.service .
-    popd
+    popd > /dev/null
 }
 
 cleanup () {
     step "Clean up: umount, remove files"
     umount root/boot
     umount root
-    kpartx -dv arch.img
+    kpartx -d arch.img
     rmdir root
     #rm "${FILE}"
     sync
@@ -340,7 +340,7 @@ undo () {
     err "Something went wrong, bailing out."
     umount root/boot
     umount root
-    kpartx -dv arch.img
+    kpartx -d arch.img
     sync
 }
 
@@ -352,15 +352,12 @@ convert_image () {
 }
 
 set_up_run () {
-cat << RUN > run.sh
+cat << 'RUN' > run.sh
 #!/bin/sh
 
-function run_machine () {
+run_machine () {
     args=(
         -M virt
-        -kernel Image
-        -initrd initramfs-linux.img
-        -append 'root=UUID=$ROOTUUID rw initrd=\initramfs-linux.img'
         -nodefaults
         -nographic
         -m 1024
@@ -376,16 +373,39 @@ function run_machine () {
         -device virtio-net-pci,netdev=n0
         -netdev user,id=n0,hostfwd=tcp::5555-:22
     )
-RUN
-cat << 'RUN2' >> run.sh
 
     qemu-system-aarch64 "${args[@]}"
 }
 
 run_machine
-RUN2
+RUN
 
     chmod 755 run.sh
+}
+
+run_install_machine () {
+    args=(
+        -M virt
+        -kernel Image
+        -initrd initramfs-linux.img
+        -append "root=UUID=$ROOTUUID rw initrd=\initramfs-linux.img"
+        -nodefaults
+        -nographic
+        -m 1024
+        -smp 2
+        -enable-kvm
+        -cpu host
+        -device virtio-rng-pci
+        -device qemu-xhci,id=xhci
+        -serial mon:stdio
+        -drive if=pflash,media=disk,id=EFI,file=QEMU_EFI.fd,cache=none,format=raw,readonly=on
+        -drive if=pflash,media=disk,id=EFIVARS,file=QEMU_VARS.fd,cache=none,format=raw
+        -drive if=virtio,media=disk,id=hda,file=arch.qcow2,cache=none,format=qcow2
+        -device virtio-net-pci,netdev=n0
+        -netdev user,id=n0,hostfwd=tcp::5555-:22
+    )
+
+    qemu-system-aarch64 "${args[@]}"
 }
 
 run_prog_checks
@@ -418,18 +438,21 @@ step "Starting machine in 10 seconds.\n \
       Use ctrl+a, c to access muxed monitor.\n \
       \"quit\" in the monitor will kill the vm.\n \
       To run your new machine, cd ${INSTALL_DIR},\n \
-      ./run.sh"
+      ./run.sh\n \
+      \n \
+      The root UUID (needed for first boot) is:\n \
+      $ROOTUUID"
 
 I=10
 while [[ $I -gt 0 ]]; do
-    echo -ne "$(tput setab 7)$(tput setaf 12)  $I  $(tput sgr0)"
+    echo -ne "   $I   "
     sleep 1
     ((I--))
     printf '\r'
 done
-echo -e "$(tput setab 7)$(tput setaf 12)  0  $(tput sgr0)"
+echo -e "   0   "
 
-./run.sh
+run_install_machine
 
 rm Image
 rm initramfs-linux.img
