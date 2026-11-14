@@ -2,7 +2,7 @@
 set -o errexit -o pipefail -o noclobber -o nounset
 
 if [[ $(id -u) -ne 0 ]]; then
-    echo "Run this as root only."
+    echo "Run this as root."
     exit 2
 fi
 
